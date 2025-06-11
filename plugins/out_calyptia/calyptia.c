@@ -507,6 +507,11 @@ static flb_sds_t get_agent_info(char *buf, size_t size, char *k)
 
         if (strncmp(key.via.str.ptr, k, len) == 0) {
             v = flb_sds_create_len(val.via.str.ptr, val.via.str.size);
+            if (v == NULL) {
+                flb_free(out_buf);
+                msgpack_unpacked_destroy(&result);
+                return NULL;
+            }
             break;
         }
     }
@@ -529,32 +534,39 @@ static int store_session_set(struct flb_calyptia *ctx, char *buf, size_t size)
     size_t mp_size;
 
     /* remove any previous session file */
-    if (ctx->fs_file) {
-        flb_fstore_file_delete(ctx->fs, ctx->fs_file);
+    if (ctx->fs_file != NULL) {
+        if (flb_fstore_file_delete(ctx->fs, ctx->fs_file) != 0) {
+            flb_plg_error(ctx->ins, "could not delete previous session file '%s'",
+                          ctx->fs_file->name);
+            return -1;
+        }
     }
 
     /* create session file */
     ctx->fs_file = flb_fstore_file_create(ctx->fs, ctx->fs_stream,
                                           CALYPTIA_SESSION_FILE, 1024);
-    if (!ctx->fs_file) {
+    if (ctx->fs_file == NULL) {
         flb_plg_error(ctx->ins, "could not create new session file");
         return -1;
     }
 
     /* store meta */
-    flb_fstore_file_meta_set(ctx->fs, ctx->fs_file,
-                             FLB_VERSION_STR "\n", sizeof(FLB_VERSION_STR) - 1);
+    ret = flb_fstore_file_meta_set(ctx->fs, ctx->fs_file,
+                                   FLB_VERSION_STR "\n", sizeof(FLB_VERSION_STR) - 1);
+    if (ret != 0) {
+        flb_plg_error(ctx->ins, "could not store session file metadata");
+    }
 
     /* encode */
     ret = flb_pack_json(buf, size, &mp_buf, &mp_size, &type, NULL);
-    if (ret < 0) {
+    if (ret != 0) {
         flb_plg_error(ctx->ins, "could not encode session information");
         return -1;
     }
 
     /* store content */
     ret = flb_fstore_file_append(ctx->fs_file, mp_buf, mp_size);
-    if (ret == -1) {
+    if (ret != 0) {
         flb_plg_error(ctx->ins, "could not store session information");
         flb_free(mp_buf);
         return -1;
@@ -579,20 +591,21 @@ static int store_session_get(struct flb_calyptia *ctx,
 
     ret = flb_fstore_file_content_copy(ctx->fs, ctx->fs_file,
                                        &buf, &size);
-
     if (size == 0) {
         return -1;
     }
 
     /* decode */
     json = flb_msgpack_raw_to_json_sds(buf, size);
-    flb_free(buf);
-    if (!json) {
+    if (json == NULL) {
+        flb_free(buf);
         return -1;
     }
 
     *out_buf = json;
     *out_size = flb_sds_len(json);
+
+    // TODO(asdf): flb_free(buf) here?
 
     return ret;
 }
@@ -604,59 +617,62 @@ static int store_session_get(struct flb_calyptia *ctx,
  */
 static int store_init(struct flb_calyptia *ctx)
 {
-    int ret;
     struct flb_fstore *fs;
+    struct flb_fstore_stream *fs_stream;
     struct flb_fstore_file *fsf;
     void *buf;
     size_t size;
 
     /* store context */
     fs = flb_fstore_create(ctx->store_path, FLB_FSTORE_FS);
-    if (!fs) {
+    if (fs == NULL) {
         flb_plg_error(ctx->ins,
                       "could not initialize 'store_path': %s",
                       ctx->store_path);
         return -1;
     }
-    ctx->fs = fs;
-
+    
     /* stream */
-    ctx->fs_stream = flb_fstore_stream_create(ctx->fs, "calyptia");
-    if (!ctx->fs_stream) {
+    fs_stream = flb_fstore_stream_create(ctx->fs, "calyptia");
+    if (fs_stream == NULL) {
         flb_plg_error(ctx->ins, "could not create storage stream");
+        flb_fstore_destroy(fs);
         return -1;
     }
+
+    ctx->fs = fs;
+    ctx->fs_stream = fs_stream;
 
     /* lookup any previous file */
     fsf = flb_fstore_file_get(ctx->fs, ctx->fs_stream, CALYPTIA_SESSION_FILE,
                               sizeof(CALYPTIA_SESSION_FILE) - 1);
-    if (!fsf) {
+    if (fsf == NULL) {
         flb_plg_debug(ctx->ins, "no session file was found");
         return 0;
     }
     ctx->fs_file = fsf;
 
     /* retrieve session info */
-    ret = store_session_get(ctx, &buf, &size);
-    if (ret == 0) {
+    if (store_session_get(ctx, &buf, &size) == 0) {
         /* agent id */
         ctx->agent_id = get_agent_info(buf, size, "id");
 
         /* agent token */
         ctx->agent_token = get_agent_info(buf, size, "token");
+        
+        flb_sds_destroy(buf);
 
-        if (ctx->agent_id && ctx->agent_token) {
+        if (ctx->agent_id != NULL && ctx->agent_token != NULL) {
             flb_plg_info(ctx->ins, "session setup OK");
         }
         else {
-            if (ctx->agent_id) {
+            if (ctx->agent_id != NULL) {
                 flb_sds_destroy(ctx->agent_id);
             }
-            if (ctx->agent_token) {
+            if (ctx->agent_token != NULL) {
                 flb_sds_destroy(ctx->agent_token);
             }
         }
-        flb_sds_destroy(buf);
     }
 
     return 0;
@@ -784,13 +800,12 @@ static int api_agent_create(struct flb_config *config, struct flb_calyptia *ctx)
 static struct flb_calyptia *config_init(struct flb_output_instance *ins,
                                         struct flb_config *config)
 {
-    int ret;
     int flags;
     struct flb_calyptia *ctx;
 
     /* Calyptia plugin context */
     ctx = flb_calloc(1, sizeof(struct flb_calyptia));
-    if (!ctx) {
+    if (ctx == NULL) {
         flb_errno();
         return NULL;
     }
@@ -801,56 +816,53 @@ static struct flb_calyptia *config_init(struct flb_output_instance *ins,
     /* Load the config map */
     ret = flb_output_config_map_set(ins, (void *) ctx);
     if (ret == -1) {
-        flb_free(ctx);
-        return NULL;
+        goto error_cleanup;
     }
 
     ctx->metrics_endpoint = flb_sds_create_size(256);
-    if (!ctx->metrics_endpoint) {
-        flb_free(ctx);
-        return NULL;
+    if (ctx->metrics_endpoint == NULL) {
+        goto error_cleanup;
     }
 
 #ifdef FLB_HAVE_CHUNK_TRACE
     ctx->trace_endpoint = flb_sds_create_size(256);
-    if (!ctx->trace_endpoint) {
-        flb_sds_destroy(ctx->metrics_endpoint);
-        flb_free(ctx);
-        return NULL;
+    if (ctx->trace_endpoint == NULL) {
+        goto error_cleanup;
     }
 #endif
 
     /* api_key */
-    if (!ctx->api_key) {
+    if (ctx->api_key == NULL) {
         flb_plg_error(ctx->ins, "configuration 'api_key' is missing");
-        flb_free(ctx);
-        return NULL;
+        goto error_cleanup;
     }
 
     /* parse 'add_label' */
     ret = config_add_labels(ins, ctx);
     if (ret == -1) {
-        return NULL;
+        goto error_cleanup;
     }
 
     /* env reader */
     ctx->env = flb_env_create();
+    if (ctx->env == NULL) {
+        goto error_cleanup;
+    }
 
     /* Set context */
     flb_output_set_context(ins, ctx);
 
     /* Initialize optional storage */
     if (ctx->store_path) {
-        ret = store_init(ctx);
-        if (ret == -1) {
-            return NULL;
+        if (store_init(ctx) == -1) {
+            goto error_cleanup;
         }
     }
 
     /* the machine-id is provided by custom calyptia, which invokes this plugin. */
-    if (!ctx->machine_id) {
+    if (ctx->machine_id == NULL) {
         flb_plg_error(ctx->ins, "machine_id has not been set");
-        return NULL;
+        goto error_cleanup;
     }
 
     flb_plg_debug(ctx->ins, "machine_id=%s", ctx->machine_id);
@@ -860,14 +872,48 @@ static struct flb_calyptia *config_init(struct flb_output_instance *ins,
     ctx->u = flb_upstream_create(ctx->config,
                                  ctx->cloud_host, ctx->cloud_port,
                                  flags, ctx->ins->tls);
-    if (!ctx->u) {
-        return NULL;
+    if (ctx->u == NULL) {
+        goto error_cleanup;
     }
 
     /* Set instance flags into upstream */
     flb_output_upstream_set(ctx->u, ins);
 
     return ctx;
+
+error_cleanup:
+    if (ctx->u != NULL) {
+        flb_upstream_destroy(ctx->u);
+    }
+
+    if (ctx->machine_id != NULL) {
+        flb_sds_free(ctx->machine_id);
+    }
+
+    // TODO(asdf): if ctx->store_path set, undo store_init?
+
+    if (ctx->env != NULL) {
+        flb_env_destroy(ctx->env);
+    }
+
+    if (ctx->trace_endpoint != NULL) {
+        flb_sds_destroy(ctx->trace_endpoint);
+    }
+
+    if (ctx->metrics_endpoint != NULL) {
+        flb_sds_destroy(ctx->metrics_endpoint);
+    }
+
+    // TODO(asdf): free ins->config_map?
+
+    // TODO(asdf): free ctx->kv_labels?
+    // if (ctx != NULL && ctx->kv_labels != NULL) {
+    //     flb_kv_release(&ctx->kv_labels);
+    // }
+    
+    flb_free(ctx);
+
+    return NULL;
 }
 
 /*
@@ -877,25 +923,35 @@ static struct flb_calyptia *config_init(struct flb_output_instance *ins,
  */
 static int register_agent(struct flb_calyptia *ctx, struct flb_config *config)
 {
-    int ret;
+    flb_sds_t metrics_endpoint;
+    flb_sds_t trace_endpoint;
 
     /* Try registration */
-    ret = api_agent_create(config, ctx);
-    if (ret != FLB_OK) {
+    if (api_agent_create(config, ctx) != FLB_OK) {
         flb_plg_warn(ctx->ins, "agent registration failed");
         return FLB_ERROR;
     }
 
     /* Update endpoints */
-    flb_sds_len_set(ctx->metrics_endpoint, 0);
-    flb_sds_printf(&ctx->metrics_endpoint, CALYPTIA_ENDPOINT_METRICS,
-                   ctx->agent_id);
+    if (flb_sds_printf(&metrics_endpoint, CALYPTIA_ENDPOINT_METRICS,
+                   ctx->agent_id) == NULL) {
+        return FLB_ERROR;
+    }
+    if (ctx->metrics_endpoint != NULL) {
+        flb_sds_destroy(ctx->metrics_endpoint);
+    }
+    ctx->metrics_endpoint=metrics_endpoint;
 
 #ifdef FLB_HAVE_CHUNK_TRACE
-    if (ctx->pipeline_id) {
-        flb_sds_len_set(ctx->trace_endpoint, 0);
-        flb_sds_printf(&ctx->trace_endpoint, CALYPTIA_ENDPOINT_TRACE,
-                       ctx->pipeline_id);
+    if (ctx->pipeline_id != NULL) {
+        if (flb_sds_printf(&trace_endpoint, CALYPTIA_ENDPOINT_TRACE,
+                       ctx->pipeline_id) == NULL) {
+            return FLB_ERROR;
+        }
+        if (ctx->trace_endpoint != NULL) {
+            flb_sds_destroy(ctx->trace_endpoint);
+        }
+        ctx->trace_endpoint = trace_endpoint;
     }
 #endif
 
@@ -1082,7 +1138,7 @@ static void cb_calyptia_flush(struct flb_event_chunk *event_chunk,
         /* Compose HTTP Client request */
         c = flb_http_client(u_conn, FLB_HTTP_POST, ctx->metrics_endpoint,
                            out_buf, out_size, NULL, 0, NULL, 0);
-        if (!c) {
+        if (c == NULL) {
             if (out_buf != event_chunk->data) {
                 cmt_encode_msgpack_destroy(out_buf);
             }
@@ -1142,7 +1198,7 @@ static void cb_calyptia_flush(struct flb_event_chunk *event_chunk,
 
     flb_upstream_conn_release(u_conn);
 
-    if (c) {
+    if (c != NULL) {
         flb_http_client_destroy(c);
     }
 
