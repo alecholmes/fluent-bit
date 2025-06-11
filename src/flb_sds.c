@@ -33,6 +33,12 @@
 #include <stdarg.h>
 #include <ctype.h>
 
+/*
+ * Internal function to allocate a new SDS with specified capacity.
+ * Creates the header structure and initializes an empty string.
+ * Return value: New SDS string, or NULL on memory allocation failure.
+ * Memory management: Allocates memory that must be freed with flb_sds_destroy().
+ */
 static flb_sds_t sds_alloc(size_t size)
 {
     void *buf;
