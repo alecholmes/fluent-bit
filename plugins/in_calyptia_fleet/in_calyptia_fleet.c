@@ -66,6 +66,11 @@ static int get_calyptia_files(struct flb_in_calyptia_fleet_config *ctx,
 
 #ifndef FLB_SYSTEM_WINDOWS
 
+/*
+ * Checks if a given path is a symbolic link (Unix only, returns FLB_FALSE on Windows).
+ * Returns -1 on lstat error, FLB_TRUE if path is a symbolic link, FLB_FALSE otherwise.
+ * Caller is responsible for ensuring path is valid. No memory management needed.
+ */
 static int is_link(const char *path) {
     struct stat st = { 0 };
 
@@ -80,13 +85,21 @@ static int is_link(const char *path) {
     return FLB_FALSE;
 }
 #else
-/* symlinks are too difficult to use on win32 so we skip their use entirely. */
+/*
+ * Windows version: symlinks are too difficult to use on win32 so we skip their use entirely.
+ * Always returns FLB_FALSE. No error conditions. No memory management needed.
+ */
 static int is_link(const char *path) {
     return FLB_FALSE;
 }
 #endif
 
 
+/*
+ * Searches for an HTTP header in the response data, case-insensitive.
+ * Returns NULL if header not found or invalid input.
+ * Returns pointer to header start in response buffer on success. Caller should not free this pointer.
+ */
 static char *find_case_header(struct flb_http_client *cli, const char *header)
 {
     char *ptr;
@@ -122,6 +135,11 @@ static char *find_case_header(struct flb_http_client *cli, const char *header)
 }
 
 /* Try to find a header value in the buffer. Copied from flb_http_client.c. */
+/*
+ * Extracts the value of an HTTP header from the response, case-insensitive.
+ * Returns -1 on error (header not found, incomplete headers, or invalid input).
+ * Returns 0 on success, setting out_val and out_len. Caller should not free out_val pointer.
+ */
 static int case_header_lookup(struct flb_http_client *cli,
                          const char *header, int header_len,
                          const char **out_val, int *out_len)
@@ -171,6 +189,11 @@ static int case_header_lookup(struct flb_http_client *cli,
 }
 
 
+/*
+ * Generates the base fleet directory path using config directory, machine ID, and fleet name/ID.
+ * Returns NULL on error (null inputs, memory allocation failure).
+ * Returns flb_sds_t string on success. Caller is responsible for freeing with flb_sds_destroy().
+ */
 static flb_sds_t generate_base_fleet_directory(struct flb_in_calyptia_fleet_config *ctx, flb_sds_t *fleet_dir)
 {
     if (fleet_dir == NULL) {
@@ -197,6 +220,11 @@ static flb_sds_t generate_base_fleet_directory(struct flb_in_calyptia_fleet_conf
                           ctx->config_dir, ctx->machine_id, ctx->fleet_id);
 }
 
+/*
+ * Constructs a full file path for fleet configuration files with appropriate extension.
+ * Returns NULL on error (null inputs, directory generation failure, or memory allocation failure).
+ * Returns flb_sds_t string on success. Caller is responsible for freeing with flb_sds_destroy().
+ */
 flb_sds_t fleet_config_filename(struct flb_in_calyptia_fleet_config *ctx, char *fname)
 {
     flb_sds_t cfgname = NULL;
@@ -224,6 +252,11 @@ flb_sds_t fleet_config_filename(struct flb_in_calyptia_fleet_config *ctx, char *
 
     return cfgname;
 }
+/*
+ * Creates a timestamped fleet configuration filename using the provided time value.
+ * Returns NULL on error. Returns flb_sds_t string on success.
+ * Caller is responsible for freeing with flb_sds_destroy().
+ */
 static flb_sds_t time_fleet_config_filename(struct flb_in_calyptia_fleet_config *ctx, time_t t)
 {
     char s_last_modified[32];
@@ -232,6 +265,11 @@ static flb_sds_t time_fleet_config_filename(struct flb_in_calyptia_fleet_config 
     return fleet_config_filename(ctx, s_last_modified);
 }
 
+/*
+ * Checks if the current configuration path matches the "new" fleet config filename.
+ * Returns FLB_FALSE on error (null inputs, memory allocation failure).
+ * Returns FLB_TRUE if paths match, FLB_FALSE otherwise. No memory management needed by caller.
+ */
 static int is_new_fleet_config(struct flb_in_calyptia_fleet_config *ctx, struct flb_config *cfg)
 {
     flb_sds_t cfgnewname;
@@ -261,6 +299,11 @@ static int is_new_fleet_config(struct flb_in_calyptia_fleet_config *ctx, struct 
     return ret;
 }
 
+/*
+ * Checks if the current configuration path matches the "current" fleet config filename.
+ * Returns FLB_FALSE on error (null inputs, memory allocation failure).
+ * Returns FLB_TRUE if paths match, FLB_FALSE otherwise. No memory management needed by caller.
+ */
 static int is_cur_fleet_config(struct flb_in_calyptia_fleet_config *ctx, struct flb_config *cfg)
 {
     flb_sds_t cfgcurname;
@@ -289,6 +332,11 @@ static int is_cur_fleet_config(struct flb_in_calyptia_fleet_config *ctx, struct 
     return ret;
 }
 
+/*
+ * Checks if the current configuration path matches the "old" fleet config filename.
+ * Returns FLB_FALSE on error (null inputs, memory allocation failure).
+ * Returns FLB_TRUE if paths match, FLB_FALSE otherwise. No memory management needed by caller.
+ */
 static int is_old_fleet_config(struct flb_in_calyptia_fleet_config *ctx, struct flb_config *cfg)
 {
     flb_sds_t cfgcurname;
@@ -318,6 +366,11 @@ static int is_old_fleet_config(struct flb_in_calyptia_fleet_config *ctx, struct 
     return ret;
 }
 
+/*
+ * Checks if a file path represents a timestamped fleet configuration file.
+ * Returns FLB_FALSE on error (null inputs, invalid timestamp format).
+ * Returns FLB_TRUE if path is a valid timestamped config file, FLB_FALSE otherwise. No memory management needed.
+ */
 static int is_timestamped_fleet_config_path(struct flb_in_calyptia_fleet_config *ctx, const char *path)
 {
     char *fname;
@@ -354,6 +407,11 @@ static int is_timestamped_fleet_config_path(struct flb_in_calyptia_fleet_config 
     return FLB_FALSE;
 }
 
+/*
+ * Checks if the current configuration file is a timestamped fleet configuration.
+ * Returns FLB_FALSE on error or if not timestamped. Returns FLB_TRUE if timestamped.
+ * No memory management needed by caller.
+ */
 static int is_timestamped_fleet_config(struct flb_in_calyptia_fleet_config *ctx, struct flb_config *cfg)
 {
     if (cfg == NULL) {
@@ -367,6 +425,11 @@ static int is_timestamped_fleet_config(struct flb_in_calyptia_fleet_config *ctx,
     return is_timestamped_fleet_config_path(ctx, cfg->conf_path_file);
 }
 
+/*
+ * Checks if the current configuration file is any type of fleet configuration (new, current, old, or timestamped).
+ * Returns FLB_FALSE if not a fleet config file, FLB_TRUE if it is any fleet config type.
+ * No memory management needed by caller.
+ */
 static int is_fleet_config(struct flb_in_calyptia_fleet_config *ctx, struct flb_config *cfg)
 {
     if (cfg == NULL) {
@@ -383,6 +446,11 @@ static int is_fleet_config(struct flb_in_calyptia_fleet_config *ctx, struct flb_
            is_timestamped_fleet_config(ctx, cfg);
 }
 
+/*
+ * Checks if the "new" fleet configuration file exists on the filesystem.
+ * Returns FLB_FALSE on error (memory allocation failure) or if file doesn't exist.
+ * Returns FLB_TRUE if file exists. No memory management needed by caller.
+ */
 static int exists_new_fleet_config(struct flb_in_calyptia_fleet_config *ctx)
 {
     int ret = FLB_FALSE;
@@ -400,6 +468,11 @@ static int exists_new_fleet_config(struct flb_in_calyptia_fleet_config *ctx)
     return ret;
 }
 
+/*
+ * Checks if the "current" fleet configuration file exists on the filesystem.
+ * Returns FLB_FALSE on error (memory allocation failure) or if file doesn't exist.
+ * Returns FLB_TRUE if file exists. No memory management needed by caller.
+ */
 static int exists_cur_fleet_config(struct flb_in_calyptia_fleet_config *ctx)
 {
     flb_sds_t cfgcurname;
@@ -418,6 +491,11 @@ static int exists_cur_fleet_config(struct flb_in_calyptia_fleet_config *ctx)
     return ret;
 }
 
+/*
+ * Checks if the "old" fleet configuration file exists on the filesystem.
+ * Returns FLB_FALSE on error (memory allocation failure) or if file doesn't exist.
+ * Returns FLB_TRUE if file exists. No memory management needed by caller.
+ */
 static int exists_old_fleet_config(struct flb_in_calyptia_fleet_config *ctx)
 {
     int ret = FLB_FALSE;
@@ -435,6 +513,11 @@ static int exists_old_fleet_config(struct flb_in_calyptia_fleet_config *ctx)
     return ret;
 }
 
+/*
+ * Checks if the fleet configuration header file exists on the filesystem.
+ * Returns FLB_FALSE on error (memory allocation failure) or if file doesn't exist.
+ * Returns FLB_TRUE if file exists. No memory management needed by caller.
+ */
 static int exists_header_fleet_config(struct flb_in_calyptia_fleet_config *ctx)
 {
     int ret = FLB_FALSE;
@@ -452,6 +535,11 @@ static int exists_header_fleet_config(struct flb_in_calyptia_fleet_config *ctx)
     return ret;
 }
 
+/*
+ * Thread function that performs configuration reload by sending SIGHUP signal.
+ * Always returns NULL. Frees the reload context internally.
+ * Caller should not access the data pointer after calling this function.
+ */
 static void *do_reload(void *data)
 {
     struct reload_ctx *reload = (struct reload_ctx *)data;
@@ -478,6 +566,11 @@ static void *do_reload(void *data)
     return NULL;
 }
 
+/*
+ * Validates a configuration file by attempting to parse it (currently hardcoded to return FLB_TRUE).
+ * Returns FLB_TRUE if config is valid, FLB_FALSE on error or invalid config.
+ * No memory management needed by caller.
+ */
 static int test_config_is_valid(struct flb_in_calyptia_fleet_config *ctx,
                                 flb_sds_t cfgpath)
 {
@@ -512,6 +605,11 @@ config_init_error:
     return ret;
 }
 
+/*
+ * Extracts timestamp from a configuration file path, handling both regular files and symlinks.
+ * Returns FLB_FALSE on error (null inputs, invalid timestamp format, readlink failure).
+ * Returns FLB_TRUE on success, setting config_timestamp. No memory management needed by caller.
+ */
 static int parse_config_name_timestamp(struct flb_in_calyptia_fleet_config *ctx,
                                       const char *cfgpath,
                                       long *config_timestamp)
@@ -568,6 +666,11 @@ static int parse_config_name_timestamp(struct flb_in_calyptia_fleet_config *ctx,
     return FLB_TRUE;
 }
 
+/*
+ * Parses timestamp from the current configuration file path.
+ * Returns FLB_FALSE on error (null inputs or parsing failure).
+ * Returns FLB_TRUE on success, setting config_timestamp. No memory management needed by caller.
+ */
 static int parse_config_timestamp(struct flb_in_calyptia_fleet_config *ctx,
                                   long *config_timestamp)
 {
@@ -580,6 +683,11 @@ static int parse_config_timestamp(struct flb_in_calyptia_fleet_config *ctx,
     return parse_config_name_timestamp(ctx, flb_ctx->config->conf_path_file, config_timestamp);
 }
 
+/*
+ * Executes configuration reload by spawning a thread and validating the config.
+ * Returns FLB_FALSE on error (parsing failure, validation failure, or thread creation issues).
+ * Returns FLB_TRUE on success. Caller should not use cfgpath after calling this function as it may be freed.
+ */
 static int execute_reload(struct flb_in_calyptia_fleet_config *ctx, flb_sds_t cfgpath)
 {
     struct reload_ctx *reload;
@@ -642,6 +750,11 @@ static int execute_reload(struct flb_in_calyptia_fleet_config *ctx, flb_sds_t cf
     return FLB_TRUE;
 }
 
+/*
+ * Searches for a key in a msgpack map object and returns its value.
+ * Returns NULL if key not found, object is not a map, or invalid inputs.
+ * Returns pointer to msgpack_object value on success. Caller should not free this pointer.
+ */
 static msgpack_object *msgpack_lookup_map_key(msgpack_object *obj, const char *keyname)
 {
     int idx;
@@ -676,6 +789,11 @@ static msgpack_object *msgpack_lookup_map_key(msgpack_object *obj, const char *k
     return NULL;
 }
 
+/*
+ * Retrieves an element from a msgpack array at the specified offset.
+ * Returns NULL if object is not an array, offset is out of bounds, or null input.
+ * Returns pointer to msgpack_object element on success. Caller should not free this pointer.
+ */
 static msgpack_object *msgpack_lookup_array_offset(msgpack_object *obj, size_t offset)
 {
     if (obj == NULL) {
@@ -693,6 +811,11 @@ static msgpack_object *msgpack_lookup_array_offset(msgpack_object *obj, size_t o
     return &obj->via.array.ptr[offset];
 }
 
+/*
+ * Parses JSON payload to extract ProjectID from API key response.
+ * Returns NULL on error (null inputs, JSON parsing failure, missing ProjectID).
+ * Returns flb_sds_t string containing ProjectID on success. Caller is responsible for freeing with flb_sds_destroy().
+ */
 static flb_sds_t parse_api_key_json(struct flb_in_calyptia_fleet_config *ctx,
                                     char *payload, size_t size)
 {
@@ -748,6 +871,11 @@ static flb_sds_t parse_api_key_json(struct flb_in_calyptia_fleet_config *ctx,
     return project_id;
 }
 
+/*
+ * Parses JSON payload from fleet search API to extract fleet ID.
+ * Returns -1 on error (null inputs, JSON parsing failure, missing fleet ID).
+ * Returns 0 on success, setting ctx->fleet_id. Fleet ID memory is managed internally.
+ */
 static ssize_t parse_fleet_search_json(struct flb_in_calyptia_fleet_config *ctx,
                                        char *payload, size_t size)
 {
@@ -811,6 +939,11 @@ static ssize_t parse_fleet_search_json(struct flb_in_calyptia_fleet_config *ctx,
     return 0;
 }
 
+/*
+ * Extracts project ID from API key by base64 decoding and JSON parsing.
+ * Returns NULL on error (null input, malformed API key, decoding failure, or parsing failure).
+ * Returns flb_sds_t string containing project ID on success. Caller is responsible for freeing with flb_sds_destroy().
+ */
 static flb_sds_t get_project_id_from_api_key(struct flb_in_calyptia_fleet_config *ctx)
 {
     unsigned char encoded[256];
@@ -850,6 +983,11 @@ static flb_sds_t get_project_id_from_api_key(struct flb_in_calyptia_fleet_config
     return parse_api_key_json(ctx, (char *)token, tlen);
 }
 
+/*
+ * Performs HTTP GET request to Calyptia fleet API with authentication headers.
+ * Returns NULL on error (null inputs, connection failure, HTTP error, or empty response).
+ * Returns flb_http_client pointer on success. Caller is responsible for destroying with flb_http_client_destroy().
+ */
 static struct flb_http_client *fleet_http_do(struct flb_in_calyptia_fleet_config *ctx,
                                              flb_sds_t url)
 {
@@ -908,6 +1046,11 @@ http_client_error:
     return NULL;
 }
 
+/*
+ * Looks up fleet ID by fleet name using the Calyptia API.
+ * Returns -1 on error (null inputs, API call failure, or fleet not found).
+ * Returns 0 on success, setting ctx->fleet_id. Fleet ID memory is managed internally.
+ */
 static int get_calyptia_fleet_id_by_name(struct flb_in_calyptia_fleet_config *ctx,
                                          struct flb_config *config)
 {
@@ -958,6 +1101,11 @@ static int get_calyptia_fleet_id_by_name(struct flb_in_calyptia_fleet_config *ct
     return 0;
 }
 
+/*
+ * Downloads a file from Calyptia API and saves it to disk with optional header content.
+ * Returns -1 on error (null inputs, HTTP failure, file creation failure).
+ * Returns 0 if file already exists, 1 if new file created. Sets time_last_modified if provided. No memory management needed by caller.
+ */
 static int get_calyptia_file(struct flb_in_calyptia_fleet_config *ctx,
                              flb_sds_t url,
                              const char *hdr,
@@ -1049,6 +1197,11 @@ client_error:
 }
 
 #ifndef _WIN32
+/*
+ * Reads files matching a glob pattern using POSIX glob() function.
+ * Returns NULL on error (glob failure, memory allocation failure).
+ * Returns cfl_array containing file paths on success. Caller is responsible for destroying with cfl_array_destroy().
+ */
 static struct cfl_array *read_glob(const char *path)
 {
     int ret = -1;
@@ -1090,6 +1243,11 @@ static struct cfl_array *read_glob(const char *path)
     return list;
 }
 #else
+/*
+ * Windows implementation of dirname() - extracts directory portion of a path.
+ * Returns pointer to modified input string (truncated at directory boundary).
+ * Returns original path if no directory separator found. Caller should not free the returned pointer separately.
+ */
 static char *dirname(char *path)
 {
     char *ptr;
@@ -1103,6 +1261,11 @@ static char *dirname(char *path)
     return path;
 }
 
+/*
+ * Windows implementation of glob pattern matching using FindFirstFile/FindNextFile.
+ * Returns NULL on error (path too long, no wildcards, file operations failure).
+ * Returns cfl_array (new or updated) on success. Caller is responsible for destroying with cfl_array_destroy().
+ */
 static struct cfl_array *read_glob_win(const char *path, struct cfl_array *list)
 {
     char *star, *p0, *p1;
@@ -1213,6 +1376,11 @@ static struct cfl_array *read_glob_win(const char *path, struct cfl_array *list)
     return list;
 }
 
+/*
+ * Windows wrapper for glob functionality - calls read_glob_win with NULL list.
+ * Returns NULL on error. Returns cfl_array on success.
+ * Caller is responsible for destroying with cfl_array_destroy().
+ */
 static struct cfl_array *read_glob(const char *path)
 {
     return read_glob_win(path, NULL);
@@ -1220,6 +1388,11 @@ static struct cfl_array *read_glob(const char *path)
 
 #endif
 
+/*
+ * Comparison function for sorting configuration file arrays by string name.
+ * Returns negative, zero, or positive value for standard qsort comparison.
+ * No memory management needed by caller.
+ */
 static int cfl_array_qsort_conf_files(const void *arg_a, const void *arg_b)
 {
     struct cfl_variant *var_a = (struct cfl_variant *)*(void **)arg_a;
@@ -1248,6 +1421,11 @@ static int cfl_array_qsort_conf_files(const void *arg_a, const void *arg_b)
     return strcmp(var_a->data.as_string, var_b->data.as_string);
 }
 
+/*
+ * Deletes old configuration files and directories based on a configuration path pattern.
+ * Returns FLB_FALSE on error (null input, memory allocation failure).
+ * Returns FLB_TRUE on success. No memory management needed by caller.
+ */
 static int calyptia_config_delete_old_dir(const char *cfgpath)
 {
     flb_sds_t cfg_glob;
@@ -1302,6 +1480,11 @@ static int calyptia_config_delete_old_dir(const char *cfgpath)
     return FLB_TRUE;
 }
 
+/*
+ * Deletes old configuration files, keeping only the 3 most recent timestamped configs.
+ * Returns -1 on error (null input, directory operations failure, memory allocation failure).
+ * Returns 0 on success. No memory management needed by caller.
+ */
 static int calyptia_config_delete_old(struct flb_in_calyptia_fleet_config *ctx)
 {
     struct cfl_array *confs;
@@ -1369,6 +1552,11 @@ static int calyptia_config_delete_old(struct flb_in_calyptia_fleet_config *ctx)
     return 0;
 }
 
+/*
+ * Finds the newest timestamped configuration file in the fleet directory.
+ * Returns NULL on error (null input, directory read failure, no timestamped configs found).
+ * Returns flb_sds_t path to newest config on success. Caller is responsible for freeing with flb_sds_destroy().
+ */
 static flb_sds_t calyptia_config_get_newest(struct flb_in_calyptia_fleet_config *ctx)
 {
     struct cfl_array *inis;
@@ -1428,6 +1616,11 @@ static flb_sds_t calyptia_config_get_newest(struct flb_in_calyptia_fleet_config 
 
 #ifndef FLB_SYSTEM_WINDOWS
 
+/*
+ * Adds a new configuration by creating symbolic links and managing old/current configs (Unix only).
+ * Returns FLB_FALSE on error (memory allocation failure, file operations failure).
+ * Returns FLB_TRUE on success. No memory management needed by caller.
+ */
 static int calyptia_config_add(struct flb_in_calyptia_fleet_config *ctx,
                                const char *cfgname)
 {
@@ -1481,6 +1674,11 @@ error:
     return rc;
 }
 
+/*
+ * Commits a configuration change by moving "new" to "current" and cleaning up old files (Unix only).
+ * Returns FLB_FALSE on error (memory allocation failure, file operations failure).
+ * Returns FLB_TRUE on success. No memory management needed by caller.
+ */
 static int calyptia_config_commit(struct flb_in_calyptia_fleet_config *ctx)
 {
     int rc = FLB_FALSE;
@@ -1527,6 +1725,11 @@ error:
     return rc;
 }
 
+/*
+ * Rolls back a configuration change by removing "new" config and restoring "old" to "current" (Unix only).
+ * Returns FLB_TRUE on success. No error conditions defined.
+ * No memory management needed by caller.
+ */
 static int calyptia_config_rollback(struct flb_in_calyptia_fleet_config *ctx,
                                     const char *cfgname)
 {
@@ -1569,18 +1772,30 @@ error:
     return rc;
 }
 #else
+/*
+ * Windows version of config add - simplified implementation that always succeeds.
+ * Always returns FLB_TRUE. No memory management needed by caller.
+ */
 static int calyptia_config_add(struct flb_in_calyptia_fleet_config *ctx,
                                const char *cfgname)
 {
     return FLB_TRUE;
 }
 
+/*
+ * Windows version of config commit - calls delete old and always succeeds.
+ * Always returns FLB_TRUE. No memory management needed by caller.
+ */
 static int calyptia_config_commit(struct flb_in_calyptia_fleet_config *ctx)
 {
     calyptia_config_delete_old(ctx);
     return FLB_TRUE;
 }
 
+/*
+ * Windows version of config rollback - removes config file and always succeeds.
+ * Always returns FLB_TRUE. No memory management needed by caller.
+ */
 static int calyptia_config_rollback(struct flb_in_calyptia_fleet_config *ctx,
                                     const char *cfgname)
 {
@@ -1589,6 +1804,11 @@ static int calyptia_config_rollback(struct flb_in_calyptia_fleet_config *ctx,
 }
 #endif
 
+/*
+ * Appends plugin properties to configuration buffer in either legacy (INI) or YAML format.
+ * No return value. Assumes valid inputs and always succeeds.
+ * Caller is responsible for managing the buffer memory.
+ */
 static void fleet_config_get_properties(flb_sds_t *buf, struct mk_list *props, int fleet_config_legacy_format)
 {
     struct mk_list *head;
@@ -1610,6 +1830,11 @@ static void fleet_config_get_properties(flb_sds_t *buf, struct mk_list *props, i
     }
 }
 
+/*
+ * Extracts fleet ID from the fleet configuration header file.
+ * Returns NULL on error (header file doesn't exist, parsing failure, missing fleet_id).
+ * Returns flb_sds_t string containing fleet ID on success. Caller is responsible for freeing with flb_sds_destroy().
+ */
 static flb_sds_t get_fleet_id_from_header(struct flb_in_calyptia_fleet_config *ctx)
 {
     struct mk_list *head;
@@ -1665,6 +1890,11 @@ static flb_sds_t get_fleet_id_from_header(struct flb_in_calyptia_fleet_config *c
     return NULL;
 }
 
+/*
+ * Generates fleet configuration content in legacy (INI) or YAML format.
+ * Returns NULL on error (null input, memory allocation failure, missing fleet_id).
+ * Returns flb_sds_t string containing configuration on success. Caller is responsible for freeing with flb_sds_destroy().
+ */
 flb_sds_t fleet_config_get(struct flb_in_calyptia_fleet_config *ctx)
 {
     flb_sds_t buf;
@@ -1729,6 +1959,11 @@ flb_sds_t fleet_config_get(struct flb_in_calyptia_fleet_config *ctx)
     return buf;
 }
 
+/*
+ * Creates the fleet header configuration file on disk.
+ * Returns FLB_FALSE on error (memory allocation failure, file creation failure, write failure).
+ * Returns FLB_TRUE on success. No memory management needed by caller.
+ */
 static int create_fleet_header(struct flb_in_calyptia_fleet_config *ctx)
 {
     flb_sds_t hdrname;
@@ -1768,6 +2003,11 @@ hdrname_error:
     return rc;
 }
 
+/*
+ * Downloads and processes fleet configuration from Calyptia API, including config files and fleet files.
+ * Returns -1 on error (memory allocation failure, API call failure, file operations failure).
+ * Returns 0 on success (no new config or config processed successfully). No memory management needed by caller.
+ */
 int get_calyptia_fleet_config(struct flb_in_calyptia_fleet_config *ctx)
 {
     flb_sds_t cfgname;
@@ -1865,6 +2105,11 @@ int get_calyptia_fleet_config(struct flb_in_calyptia_fleet_config *ctx)
 }
 
 /* cb_collect callback */
+/*
+ * Collector callback function that retrieves fleet configuration on scheduled intervals.
+ * Returns -1 on error (fleet lookup failure or config retrieval failure).
+ * Returns 0 on success. No memory management needed by caller.
+ */
 static int in_calyptia_fleet_collect(struct flb_input_instance *ins,
                                      struct flb_config *config,
                                      void *in_context)
@@ -1885,6 +2130,11 @@ fleet_id_error:
     FLB_INPUT_RETURN(ret);
 }
 
+/*
+ * Creates the fleet configuration directory structure if it doesn't exist.
+ * Returns -1 on error (directory creation failure).
+ * Returns 0 on success. No memory management needed by caller.
+ */
 static int create_fleet_directory(struct flb_in_calyptia_fleet_config *ctx)
 {
     flb_sds_t myfleetdir = NULL;
@@ -1910,6 +2160,11 @@ static int create_fleet_directory(struct flb_in_calyptia_fleet_config *ctx)
     return 0;
 }
 
+/*
+ * Generates a timestamped directory path for fleet configuration files.
+ * Returns NULL on error (memory allocation failure, path generation failure).
+ * Returns flb_sds_t string containing directory path on success. Caller is responsible for freeing with flb_sds_destroy().
+ */
 static flb_sds_t fleet_gendir(struct flb_in_calyptia_fleet_config *ctx, time_t timestamp)
 {
     flb_sds_t fleetdir = NULL;
@@ -1938,6 +2193,11 @@ static flb_sds_t fleet_gendir(struct flb_in_calyptia_fleet_config *ctx, time_t t
     return fleetcurdir;
 }
 
+/*
+ * Creates a timestamped directory for fleet configuration files.
+ * Returns -1 on error (directory generation failure, mkdir failure).
+ * Returns 0 on success. No memory management needed by caller.
+ */
 static int fleet_mkdir(struct flb_in_calyptia_fleet_config *ctx, time_t timestamp)
 {
     int ret = -1;
@@ -1955,6 +2215,11 @@ static int fleet_mkdir(struct flb_in_calyptia_fleet_config *ctx, time_t timestam
     return ret;
 }
 
+/*
+ * Changes current working directory to the fleet configuration directory.
+ * Returns -1 on error (directory generation failure, chdir failure).
+ * Returns 0 on success. No memory management needed by caller.
+ */
 static int fleet_cur_chdir(struct flb_in_calyptia_fleet_config *ctx)
 {
     flb_sds_t fleetcurdir;
@@ -1973,6 +2238,11 @@ static int fleet_cur_chdir(struct flb_in_calyptia_fleet_config *ctx)
     return ret;
 }
 
+/*
+ * Loads an existing fleet configuration file if not already using one.
+ * Returns FLB_TRUE if reload was executed, FLB_FALSE if already using fleet config or no config found.
+ * No memory management needed by caller.
+ */
 static int load_fleet_config(struct flb_in_calyptia_fleet_config *ctx)
 {
     flb_ctx_t *flb_ctx = flb_context_get();
@@ -2009,6 +2279,11 @@ static int load_fleet_config(struct flb_in_calyptia_fleet_config *ctx)
     return FLB_FALSE;
 }
 
+/*
+ * Creates a fleet file by decoding base64 content and writing to disk.
+ * Returns -1 on error (memory allocation failure, file creation failure, base64 decode failure).
+ * Returns 0 on success. No memory management needed by caller.
+ */
 static int create_fleet_file(flb_sds_t fleetdir,
                              const char *name,
                              int nlen,
@@ -2067,6 +2342,11 @@ static int create_fleet_file(flb_sds_t fleetdir,
     return 0;
 }
 
+/*
+ * Processes JSON payload containing fleet files and creates them in the timestamped directory.
+ * Returns -1 on error (JSON parsing failure, file creation failure).
+ * Returns 0 on success. No memory management needed by caller.
+ */
 static int create_fleet_files(struct flb_in_calyptia_fleet_config *ctx,
                               char *payload, size_t size, time_t timestamp)
 {
@@ -2146,6 +2426,11 @@ static int create_fleet_files(struct flb_in_calyptia_fleet_config *ctx,
     return 0;
 }
 
+/*
+ * Downloads fleet files from Calyptia API and creates them in the timestamped directory.
+ * Returns -1 on error (null inputs, HTTP failure, directory creation failure, file processing failure).
+ * Returns 1 on success. No memory management needed by caller.
+ */
 static int get_calyptia_files(struct flb_in_calyptia_fleet_config *ctx,
                               time_t timestamp)
 {
@@ -2174,6 +2459,11 @@ file_error:
     return ret;
 }
 
+/*
+ * Initializes the Calyptia fleet input plugin, setting up directories, networking, and collectors.
+ * Returns -1 on error (memory allocation failure, config loading failure, networking setup failure).
+ * Returns 0 on success. Plugin context memory is managed internally.
+ */
 static int in_calyptia_fleet_init(struct flb_input_instance *in,
                           struct flb_config *config, void *data)
 {
@@ -2306,18 +2596,30 @@ static int in_calyptia_fleet_init(struct flb_input_instance *in,
     return 0;
 }
 
+/*
+ * Pauses the fleet collector.
+ * No return value. No memory management needed by caller.
+ */
 static void cb_in_calyptia_fleet_pause(void *data, struct flb_config *config)
 {
     struct flb_in_calyptia_fleet_config *ctx = data;
     flb_input_collector_pause(ctx->collect_fd, ctx->ins);
 }
 
+/*
+ * Resumes the fleet collector.
+ * No return value. No memory management needed by caller.
+ */
 static void cb_in_calyptia_fleet_resume(void *data, struct flb_config *config)
 {
     struct flb_in_calyptia_fleet_config *ctx = data;
     flb_input_collector_resume(ctx->collect_fd, ctx->ins);
 }
 
+/*
+ * Cleans up the fleet plugin context and frees allocated memory.
+ * Always returns 0. No memory management required by caller after this function returns.
+ */
 static int in_calyptia_fleet_exit(void *data, struct flb_config *config)
 {
     (void) *config;

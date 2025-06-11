@@ -34,6 +34,11 @@
 
 flb_sds_t custom_calyptia_pipeline_config_get(struct flb_config *ctx);
 
+/*
+ * Determines I/O flags based on TLS configuration.
+ * Returns FLB_IO_TLS if TLS is enabled, FLB_IO_TCP otherwise.
+ * No memory management needed by caller.
+ */
 static int get_io_flags(struct flb_output_instance *ins)
 {
     int flags = 0;
@@ -48,6 +53,11 @@ static int get_io_flags(struct flb_output_instance *ins)
     return flags;
 }
 
+/*
+ * Parses and adds configured labels to the context's label list.
+ * Returns -1 on error (invalid label format, memory allocation failure).
+ * Returns 0 on success. Labels are stored in ctx->kv_labels and managed internally.
+ */
 static int config_add_labels(struct flb_output_instance *ins,
                              struct flb_calyptia *ctx)
 {
@@ -82,6 +92,11 @@ static int config_add_labels(struct flb_output_instance *ins,
     return 0;
 }
 
+/*
+ * Appends configured labels from the context to a cmetrics object.
+ * No return value. Assumes valid inputs and always succeeds.
+ * No memory management needed by caller.
+ */
 static void append_labels(struct flb_calyptia *ctx, struct cmt *cmt)
 {
     struct flb_kv *kv;
@@ -93,6 +108,11 @@ static void append_labels(struct flb_calyptia *ctx, struct cmt *cmt)
     }
 }
 
+/*
+ * Packs a string into msgpack format.
+ * No return value. Assumes valid inputs and always succeeds.
+ * No memory management needed by caller.
+ */
 static void pack_str(msgpack_packer *mp_pck, char *str)
 {
     int len;
@@ -102,6 +122,11 @@ static void pack_str(msgpack_packer *mp_pck, char *str)
     msgpack_pack_str_body(mp_pck, str, len);
 }
 
+/*
+ * Packs an environment variable into msgpack if it exists, stripping optional prefix from key name.
+ * No return value. Only packs if environment variable exists.
+ * No memory management needed by caller.
+ */
 static void pack_env(struct flb_env *env, char *prefix,  char *key,
                      struct flb_mp_map_header *h,
                      msgpack_packer *mp_pck)
@@ -122,6 +147,11 @@ static void pack_env(struct flb_env *env, char *prefix,  char *key,
     }
 }
 
+/*
+ * Packs environment metadata (Kubernetes, AWS) into msgpack format.
+ * No return value. Only packs metadata if corresponding environment flags are enabled.
+ * No memory management needed by caller.
+ */
 static void pack_env_metadata(struct flb_env *env,
                               struct flb_mp_map_header *mh, msgpack_packer *mp_pck)
 {
@@ -174,6 +204,11 @@ static void pack_env_metadata(struct flb_env *env,
     flb_mp_map_header_end(&meta);
 }
 
+/*
+ * Generates agent metadata as JSON string containing system info, configuration, and environment data.
+ * Returns NULL on error (memory allocation failure, config generation failure).
+ * Returns flb_sds_t JSON string on success. Caller is responsible for freeing with flb_sds_destroy().
+ */
 static flb_sds_t get_agent_metadata(struct flb_calyptia *ctx)
 {
     int len;
@@ -316,6 +351,11 @@ static flb_sds_t get_agent_metadata(struct flb_calyptia *ctx)
     return meta;
 }
 
+/*
+ * Performs HTTP request to Calyptia API with appropriate headers based on action type.
+ * Returns FLB_ERROR on error (null inputs, missing tokens, HTTP failures).
+ * Returns FLB_RETRY on retryable errors, FLB_OK on success. No memory management needed by caller.
+ */
 static int calyptia_http_do(struct flb_calyptia *ctx, struct flb_http_client *c,
                             int type)
 {
@@ -411,6 +451,11 @@ static int calyptia_http_do(struct flb_calyptia *ctx, struct flb_http_client *c,
     return FLB_OK;
 }
 
+/*
+ * Extracts a specific field value from JSON response by parsing msgpack.
+ * Returns NULL on error (JSON parsing failure, key not found, memory allocation failure).
+ * Returns flb_sds_t string containing field value on success. Caller is responsible for freeing with flb_sds_destroy().
+ */
 static flb_sds_t get_agent_info(char *buf, size_t size, char *k)
 {
     int i;
@@ -471,7 +516,11 @@ static flb_sds_t get_agent_info(char *buf, size_t size, char *k)
     return v;
 }
 
-/* Set the session content */
+/*
+ * Stores session information (agent ID, token) to persistent storage.
+ * Returns -1 on error (file creation failure, encoding failure, write failure).
+ * Returns 0 on success. No memory management needed by caller.
+ */
 static int store_session_set(struct flb_calyptia *ctx, char *buf, size_t size)
 {
     int ret;
@@ -515,6 +564,11 @@ static int store_session_set(struct flb_calyptia *ctx, char *buf, size_t size)
     return 0;
 }
 
+/*
+ * Retrieves session information from persistent storage and converts to JSON.
+ * Returns -1 on error (no stored session, file read failure, conversion failure).
+ * Returns 0 on success, setting out_buf and out_size. Caller is responsible for freeing out_buf with flb_sds_destroy().
+ */
 static int store_session_get(struct flb_calyptia *ctx,
                              void **out_buf, size_t *out_size)
 {
@@ -543,6 +597,11 @@ static int store_session_get(struct flb_calyptia *ctx,
     return ret;
 }
 
+/*
+ * Initializes persistent storage and loads any existing session data.
+ * Returns -1 on error (storage creation failure, stream creation failure).
+ * Returns 0 on success. Storage objects are managed internally in ctx.
+ */
 static int store_init(struct flb_calyptia *ctx)
 {
     int ret;
@@ -603,7 +662,11 @@ static int store_init(struct flb_calyptia *ctx)
     return 0;
 }
 
-/* Agent creation is perform on initialization using a sync upstream connection */
+/*
+ * Creates or updates agent registration with Calyptia API using synchronous connection.
+ * Returns FLB_ERROR/FLB_RETRY on error (metadata generation failure, connection failure, HTTP errors).
+ * Returns FLB_OK on success, setting agent_id and agent_token in ctx. No memory management needed by caller.
+ */
 static int api_agent_create(struct flb_config *config, struct flb_calyptia *ctx)
 {
     int ret;
@@ -713,6 +776,11 @@ static int api_agent_create(struct flb_config *config, struct flb_calyptia *ctx)
     return flb_ret;
 }
 
+/*
+ * Initializes the Calyptia output plugin configuration and context.
+ * Returns NULL on error (memory allocation failure, configuration errors, networking setup failure).
+ * Returns initialized context on success. Context memory is managed internally.
+ */
 static struct flb_calyptia *config_init(struct flb_output_instance *ins,
                                         struct flb_config *config)
 {
@@ -802,6 +870,11 @@ static struct flb_calyptia *config_init(struct flb_output_instance *ins,
     return ctx;
 }
 
+/*
+ * Registers the agent with Calyptia API and updates endpoint URLs.
+ * Returns FLB_ERROR on registration failure, FLB_OK on success.
+ * Updates metrics_endpoint and trace_endpoint internally. No memory management needed by caller.
+ */
 static int register_agent(struct flb_calyptia *ctx, struct flb_config *config)
 {
     int ret;
@@ -830,6 +903,11 @@ static int register_agent(struct flb_calyptia *ctx, struct flb_config *config)
     return FLB_OK;
 }
 
+/*
+ * Initializes the Calyptia output plugin instance.
+ * Returns -1 on error (configuration failure, agent registration failure).
+ * Returns 0 on success. Plugin context memory is managed internally.
+ */
 static int cb_calyptia_init(struct flb_output_instance *ins,
                            struct flb_config *config, void *data)
 {
@@ -859,6 +937,11 @@ static int cb_calyptia_init(struct flb_output_instance *ins,
     return 0;
 }
 
+/*
+ * Decodes and logs payload data for debugging purposes.
+ * No return value. Logs warning if decoding fails.
+ * No memory management needed by caller.
+ */
 static void debug_payload(struct flb_calyptia *ctx, void *data, size_t bytes)
 {
     int ret;
@@ -878,6 +961,10 @@ static void debug_payload(struct flb_calyptia *ctx, void *data, size_t bytes)
     cmt_destroy(cmt);
 }
 
+/*
+ * Cleans up the Calyptia plugin context and frees all allocated memory.
+ * Always returns 0. No memory management required by caller after this function returns.
+ */
 static int cb_calyptia_exit(void *data, struct flb_config *config)
 {
     struct flb_calyptia *ctx = data;
@@ -922,6 +1009,12 @@ static int cb_calyptia_exit(void *data, struct flb_config *config)
     return 0;
 }
 
+/*
+ * Processes and sends event data (metrics/traces) to Calyptia Cloud API.
+ * Handles agent re-registration if needed, label appending, and HTTP delivery.
+ * No return value (uses FLB_OUTPUT_RETURN macro). May retry on connection failures.
+ * No memory management needed by caller.
+ */
 static void cb_calyptia_flush(struct flb_event_chunk *event_chunk,
                              struct flb_output_flush *out_flush,
                              struct flb_input_instance *i_ins,

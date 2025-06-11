@@ -47,8 +47,8 @@ int (*flb_close)(int fd) = close;
 int (*flb_utils_read_file_wrapper)(char *path, char **out_buf, size_t *out_size) = flb_utils_read_file;
 
 /*
- * Check if the key belongs to a sensitive data field, if so report it. We never
- * share any sensitive data.
+ * Check if the key represents a sensitive property, returning FLB_TRUE if so.
+ * Caling could must avoid leaking sensitive property values.
  */
 static int is_sensitive_property(char *key)
 {
@@ -77,6 +77,11 @@ static int is_sensitive_property(char *key)
     return FLB_FALSE;
 }
 
+/*
+ * Appends plugin properties to a configuration buffer string, redacting sensitive properties.
+ * No return value. The function assumes the input buffer is valid and will always succeed.
+ * Caller is responsible for managing the memory of the buffer passed in.
+ */
 static void pipeline_config_add_properties(flb_sds_t *buf, struct mk_list *props)
 {
     struct mk_list *head;
@@ -100,6 +105,11 @@ static void pipeline_config_add_properties(flb_sds_t *buf, struct mk_list *props
     }
 }
 
+/*
+ * Generates a complete Fluent Bit configuration string representation including all input, filter, and output instances.
+ * Returns NULL on memory allocation failure, otherwise returns an flb_sds_t string.
+ * Caller is responsible for freeing the returned string with flb_sds_destroy().
+ */
 flb_sds_t custom_calyptia_pipeline_config_get(struct flb_config *ctx)
 {
     char tmp[32];
@@ -213,6 +223,11 @@ flb_sds_t custom_calyptia_pipeline_config_get(struct flb_config *ctx)
     return buf;
 }
 
+/**
+ * This sets the fleet input plugin properties, copying user-provided values
+ * from the calyptia custom plugin struct.
+ * This returns a non-zero value on error.
+ */
 int set_fleet_input_properties(struct calyptia *ctx, struct flb_input_instance *fleet)
 {
     if (!fleet) {
@@ -258,6 +273,11 @@ int set_fleet_input_properties(struct calyptia *ctx, struct flb_input_instance *
     return 0;
 }
 
+/*
+ * Creates and configures a Calyptia Cloud output plugin instance with labels and connection settings.
+ * Returns NULL on error (plugin creation failure, routing failure, or memory allocation failure).
+ * Returns a valid flb_output_instance pointer on success. Caller should not free this as it's managed by Fluent Bit.
+ */
 static struct flb_output_instance *setup_cloud_output(struct flb_config *config, struct calyptia *ctx)
 {
     int ret;
@@ -361,6 +381,12 @@ static struct flb_output_instance *setup_cloud_output(struct flb_config *config,
     return cloud;
 }
 
+/**
+ * Convert a string representing a SHA256 hash to a hex string.asm
+ * This returns NULL if the input string contains invalid characters
+ * or if memory allocation fails.
+ * The caller is responsible for freeing the returned string.
+ */
 static flb_sds_t sha256_to_hex(unsigned char *sha256)
 {
     int idx;
@@ -388,6 +414,11 @@ static flb_sds_t sha256_to_hex(unsigned char *sha256)
     return hex;
 }
 
+/**
+ * Return the full path for the agent's fleet directory.asm
+ * This returns NULL on error.
+ * The caller is responsible for freeing the returned string.
+ */
 static flb_sds_t generate_base_agent_directory(struct calyptia *ctx, flb_sds_t *fleet_dir)
 {
     flb_sds_t ret = NULL;
@@ -412,6 +443,11 @@ static flb_sds_t generate_base_agent_directory(struct calyptia *ctx, flb_sds_t *
     return ret;
 }
 
+/*
+ * Constructs a full file path for agent configuration files within the fleet config directory.
+ * Returns NULL on error (null inputs, directory generation failure, or memory allocation failure).
+ * Returns an flb_sds_t string on success. Caller is responsible for freeing with flb_sds_destroy().
+ */
 flb_sds_t agent_config_filename(struct calyptia *ctx, char *fname)
 {
     flb_sds_t cfgname = NULL;
@@ -434,6 +470,11 @@ flb_sds_t agent_config_filename(struct calyptia *ctx, char *fname)
     return cfgname;
 }
 
+/*
+ * Generates a new UUID v4 string for machine identification.
+ * Returns NULL on memory allocation failure or UUID generation failure.
+ * Returns a malloc'd string on success. Caller is responsible for freeing with flb_free().
+ */
 static char* generate_uuid() {
     char* uuid = flb_malloc(UUID_BUFFER_SIZE);
     if (!uuid) {
@@ -449,6 +490,11 @@ static char* generate_uuid() {
     return uuid;
 }
 
+/*
+ * Writes a UUID string to a specified file path, creating or truncating the file.
+ * Returns FLB_FALSE on error (null inputs, file creation/write failure).
+ * Returns FLB_TRUE on success. Caller is responsible for ensuring inputs are valid.
+ */
 static int write_uuid_to_file(flb_sds_t fleet_machine_id, char* uuid) {
     int fd;
     size_t uuid_len;
@@ -474,6 +520,11 @@ static int write_uuid_to_file(flb_sds_t fleet_machine_id, char* uuid) {
     return FLB_TRUE;
 }
 
+/*
+ * Creates the fleet configuration directory if it doesn't exist.
+ * Returns -1 on error (null context or directory creation failure).
+ * Returns 0 on success (directory exists or was created successfully). No memory management needed by caller.
+ */
 static int create_agent_directory(struct calyptia *ctx)
 {
     if( ctx == NULL ) {
@@ -494,6 +545,12 @@ static int create_agent_directory(struct calyptia *ctx)
     return 0;
 }
 
+/*
+ * Retrieves or generates a machine ID for agent identification, using platform-specific methods.
+ * On Windows, uses system machine ID. On other platforms, generates/reads UUID from file or falls back to system machine ID.
+ * Returns NULL on error (directory creation failure, file I/O failure, or memory allocation failure).
+ * Returns an flb_sds_t string on success. Caller is responsible for freeing with flb_sds_destroy().
+ */
 flb_sds_t get_machine_id(struct calyptia *ctx)
 {
     int ret = -1;
@@ -585,6 +642,12 @@ flb_sds_t get_machine_id(struct calyptia *ctx)
     return sha256_to_hex(sha256_buf);
 }
 
+/*
+ * Initializes the Calyptia custom plugin, setting up metrics collection, cloud output, and fleet input.
+ * Creates context, configures machine ID, and establishes input/output plugin instances and routing.
+ * Returns -1 on error (memory allocation failure, plugin creation failure, or configuration failure).
+ * Returns 0 on success. Plugin context memory is managed internally and freed in cb_calyptia_exit.
+ */
 static int cb_calyptia_init(struct flb_custom_instance *ins,
                          struct flb_config *config,
                          void *data)
@@ -669,6 +732,11 @@ static int cb_calyptia_init(struct flb_custom_instance *ins,
     return 0;
 }
 
+/*
+ * Cleans up the Calyptia plugin context and frees allocated memory.
+ * Handles null context gracefully and frees machine_id if it was auto-configured.
+ * Always returns 0. No memory management required by caller.
+ */
 static int cb_calyptia_exit(void *data, struct flb_config *config)
 {
     struct calyptia *ctx = data;
