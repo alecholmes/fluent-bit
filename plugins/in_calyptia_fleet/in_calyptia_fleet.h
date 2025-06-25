@@ -45,6 +45,9 @@ struct flb_in_calyptia_fleet_config {
     /* flag used to mark fleet_id for release when found automatically. */
     int fleet_id_found;
 
+    /* flag to indicate fleet no longer exists */
+    int fleet_deleted;
+
     flb_sds_t fleet_name;
     flb_sds_t machine_id;
     flb_sds_t config_dir;

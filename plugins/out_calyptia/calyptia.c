@@ -703,6 +703,9 @@ static int api_agent_create(struct flb_config *config, struct flb_calyptia *ctx)
             flb_plg_info(ctx->ins, "known agent registration successful");
         }
     }
+    else if (c->resp.status == 404) {
+        ctx->fleet_deleted = FLB_TRUE;
+    }
 
     /* release resources */
     flb_sds_destroy(meta);
@@ -751,6 +754,8 @@ static struct flb_calyptia *config_init(struct flb_output_instance *ins,
         return NULL;
     }
 #endif
+
+    ctx->fleet_deleted = FLB_FALSE;
 
     /* api_key */
     if (!ctx->api_key) {
@@ -855,6 +860,10 @@ static int cb_calyptia_init(struct flb_output_instance *ins,
         flb_plg_error(ins, "agent registration failed and register_retry_on_flush=false");
         return -1;
     }
+    else if (ret != FLB_OK && ctx->fleet_deleted == FLB_TRUE) {
+        flb_plg_error(ins, "agent registration failed due to fleet not existing");
+        return -1;
+    }
 
     return 0;
 }
@@ -940,6 +949,11 @@ static void cb_calyptia_flush(struct flb_event_chunk *event_chunk,
     (void) i_ins;
     (void) config;
 
+    if (ctx->fleet_deleted == FLB_TRUE) {
+        flb_plg_debug(ctx->ins, "fleet flush skipped since fleet no longer exists");
+        FLB_OUTPUT_RETURN(FLB_ERROR);
+    }
+
     if ((!ctx->agent_id || !ctx->agent_token) && ctx->register_retry_on_flush) {
         flb_plg_info(ctx->ins, "missing agent_id or agent_token, attempting re-registration register_retry_on_flush=true");
         if (register_agent(ctx, config) != FLB_OK) {
@@ -1001,6 +1015,18 @@ static void cb_calyptia_flush(struct flb_event_chunk *event_chunk,
         ret = calyptia_http_do(ctx, c, CALYPTIA_ACTION_METRICS);
         if (ret == FLB_OK) {
             flb_plg_debug(ctx->ins, "metrics delivered OK");
+        }
+        else if (c->resp.status == 404 || c->resp.status == 403) {
+            /* If the fleet is deleted, we should not retry */
+            ctx->fleet_deleted = FLB_TRUE;
+            flb_plg_error(ctx->ins, "fleet no longer exists, fleet_id: %s",
+                          ctx->fleet_id ? ctx->fleet_id : "unknown");
+            FLB_OUTPUT_RETURN(FLB_ERROR);
+        }
+        else if (c->resp.status == 422) {
+            flb_plg_error(ctx->ins, "invalid metrics payload");
+            debug_payload(ctx, out_buf, out_size);
+            FLB_OUTPUT_RETURN(FLB_ERROR);
         }
         else {
             flb_plg_error(ctx->ins, "could not deliver metrics");

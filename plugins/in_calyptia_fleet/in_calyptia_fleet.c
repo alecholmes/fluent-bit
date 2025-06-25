@@ -850,8 +850,16 @@ static flb_sds_t get_project_id_from_api_key(struct flb_in_calyptia_fleet_config
     return parse_api_key_json(ctx, (char *)token, tlen);
 }
 
+/**
+ * Perform an HTTP GET against the url.
+ * A client for the request is returned if the request was successful.
+ * The caller is responsible for destroying the client.
+ * If http_status_out is not NULL and a response was received from the server,
+ * the HTTP status code is stored there.
+ */
 static struct flb_http_client *fleet_http_do(struct flb_in_calyptia_fleet_config *ctx,
-                                             flb_sds_t url)
+                                             flb_sds_t url,
+                                             int *http_status_out)
 {
     int ret = -1;
     size_t b_sent;
@@ -896,6 +904,9 @@ static struct flb_http_client *fleet_http_do(struct flb_in_calyptia_fleet_config
         goto http_do_error;
     }
 
+    if (http_status_out != NULL) {
+        *http_status_out = client->resp.status;
+    }
     if (client->resp.status != 200) {
         flb_plg_error(ctx->ins, "search http status code error: %d", client->resp.status);
         goto http_do_error;
@@ -941,7 +952,7 @@ static int get_calyptia_fleet_id_by_name(struct flb_in_calyptia_fleet_config *ct
     flb_sds_printf(&url, CALYPTIA_ENDPOINT_FLEET_BY_NAME,
                    project_id, ctx->fleet_name);
 
-    client = fleet_http_do(ctx, url);
+    client = fleet_http_do(ctx, url, NULL);
     flb_sds_destroy(url);
 
     if (!client) {
@@ -951,6 +962,7 @@ static int get_calyptia_fleet_id_by_name(struct flb_in_calyptia_fleet_config *ct
 
     if (parse_fleet_search_json(ctx, client->resp.payload, client->resp.payload_size) == -1) {
         flb_plg_error(ctx->ins, "unable to find fleet: %s", ctx->fleet_name);
+        ctx->fleet_deleted = FLB_TRUE;
         flb_http_client_destroy(client);
         flb_sds_destroy(project_id);
         return -1;
@@ -970,7 +982,8 @@ static int get_calyptia_file(struct flb_in_calyptia_fleet_config *ctx,
                              flb_sds_t url,
                              const char *hdr,
                              const char *dst,
-                             time_t *time_last_modified)
+                             time_t *time_last_modified,
+                             int *get_http_status_out)
 {
     struct flb_http_client *client;
     size_t len;
@@ -986,7 +999,7 @@ static int get_calyptia_file(struct flb_in_calyptia_fleet_config *ctx,
         return -1;
     }
 
-    client = fleet_http_do(ctx, url);
+    client = fleet_http_do(ctx, url, get_http_status_out);
     if (client == NULL) {
         return -1;
     }
@@ -1791,6 +1804,7 @@ int get_calyptia_fleet_config(struct flb_in_calyptia_fleet_config *ctx)
     flb_sds_t hdrname;
     time_t time_last_modified;
     int ret = -1;
+    int http_status = 0;
 
     if (ctx->fleet_url == NULL) {
         ctx->fleet_url = flb_sds_create_size(CALYPTIA_MAX_DIR_SIZE);
@@ -1830,8 +1844,16 @@ int get_calyptia_fleet_config(struct flb_in_calyptia_fleet_config *ctx)
     flb_sds_destroy(hdrname);
 
     /* create the base file. */
-    ret = get_calyptia_file(ctx, ctx->fleet_url, header, NULL, &time_last_modified);
+    ret = get_calyptia_file(ctx, ctx->fleet_url, header, NULL, &time_last_modified, &http_status);
     flb_sds_destroy(header);
+
+    /* Handle the fleet not existing */
+    if (http_status == 404) {
+        flb_plg_error(ctx->ins, "fleet no longer exists, fleet_id: %s",
+                     ctx->fleet_id ? ctx->fleet_id : "unknown");
+        ctx->fleet_deleted = FLB_TRUE;
+        return -1;
+    }
 
     /* new file created! */
     if (ret == 1) {
@@ -1886,6 +1908,12 @@ static int in_calyptia_fleet_collect(struct flb_input_instance *ins,
 {
     int ret = -1;
     struct flb_in_calyptia_fleet_config *ctx = in_context;
+
+    /* If fleet was deleted, do not attempt to get config */
+    if (ctx->fleet_deleted) {
+        flb_plg_debug(ctx->ins, "fleet collection skipped since fleet no longer exists");
+        FLB_INPUT_RETURN(1); // return 0?
+    }
 
     if (ctx->fleet_id == NULL) {
         if (get_calyptia_fleet_id_by_name(ctx, config) == -1) {
@@ -2171,7 +2199,7 @@ static int get_calyptia_files(struct flb_in_calyptia_fleet_config *ctx,
         return -1;
     }
 
-    client = fleet_http_do(ctx, ctx->fleet_files_url);
+    client = fleet_http_do(ctx, ctx->fleet_files_url, NULL);
     if (client == NULL) {
         return -1;
     }
@@ -2217,6 +2245,7 @@ static int in_calyptia_fleet_init(struct flb_input_instance *in,
     ctx->ins = in;
     ctx->collect_fd = -1;
     ctx->fleet_id_found = FLB_FALSE;
+    ctx->fleet_deleted = FLB_FALSE;
     ctx->config_timestamp = -1;
 
     /* Load the config map */
