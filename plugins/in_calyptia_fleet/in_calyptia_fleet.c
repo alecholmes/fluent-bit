@@ -470,13 +470,15 @@ static void *do_reload(void *data)
     /* avoid reloading the current configuration... just use our new one! */
     flb_context_set(reload->flb);
     reload->flb->config->enable_hot_reload = FLB_TRUE;
+    reload->flb->config->hot_reload_succeeded = FLB_FALSE;
     if (reload->flb->config->conf_path_file) {
         flb_sds_destroy(reload->flb->config->conf_path_file);
     }
     reload->flb->config->conf_path_file = reload->cfg_path;
 
-    flb_free(reload);
     sleep(5);
+    flb_info("reloading configuration from path: %s", reload->cfg_path);
+    flb_free(reload);
 #ifndef FLB_SYSTEM_WINDOWS
     kill(getpid(), SIGHUP);
 #else
@@ -503,8 +505,9 @@ static int parse_config_name_timestamp(struct flb_in_calyptia_fleet_config *ctx,
     /* Prevent undefined references due to use of readlink */
 #ifndef FLB_SYSTEM_WINDOWS
     case FLB_TRUE:
+
         len = readlink(cfgpath, realname, sizeof(realname) - 1);
-        if (len < 0 || len >= (sizeof(realname) - 1)) {
+        if (len == -1 || len >= sizeof(realname) - 1) {
             return FLB_FALSE;
         }
         realname[len] = '\0';
@@ -569,6 +572,7 @@ static int execute_reload(struct flb_in_calyptia_fleet_config *ctx, flb_sds_t cf
         flb_sds_destroy(cfgpath);
         return FLB_FALSE;
     }
+
     reload->flb = flb;
     reload->cfg_path = cfgpath;
 
@@ -984,7 +988,7 @@ static int check_timestamp_is_newer(struct flb_in_calyptia_fleet_config *ctx, ti
         /* Check if existing file timestamp is greater than or equal to new timestamp */
         if (file_timestamp >= new_timestamp) {
             flb_plg_debug(ctx->ins,
-                          "existing file with timestamp %lld >= new timestamp %lld",
+                          "existing file with timestamp %ld >= new timestamp %ld",
                           (long long)file_timestamp, (long long)new_timestamp);
             ret = FLB_FALSE;
             break;
@@ -1444,17 +1448,20 @@ static int calyptia_config_add(struct flb_in_calyptia_fleet_config *ctx,
         goto error;
     }
 
-    if (exists_new_fleet_config(ctx) == FLB_TRUE) {
-
-        if (rename(cfgnewname, cfgoldname)) {
-            goto error;
-        }
-    }
-    else if (exists_cur_fleet_config(ctx) == FLB_TRUE) {
-
+    if (exists_cur_fleet_config(ctx) == FLB_TRUE) {
         if (rename(cfgcurname, cfgoldname)) {
             goto error;
         }
+    }
+
+    /* If there is uncommitted new config, delete and replace it */
+    if (exists_new_fleet_config(ctx) == FLB_TRUE) {
+        flb_plg_warn(ctx->ins, "replacing uncommitted new config: %s", cfgnewname);
+        if (calyptia_config_delete_new(ctx) != FLB_TRUE) {
+            flb_plg_error(ctx->ins, "unable to delete uncommitted new config");
+            goto error;
+        }
+        flb_plg_warn(ctx->ins, "deleted uncommitted new config: %s", cfgnewname);
     }
 
     if (symlink(cfgname, cfgnewname)) {
@@ -1480,6 +1487,11 @@ error:
     return rc;
 }
 
+/**
+* Commits the latest received config as the valid, now-current config.
+* This updates the symlink to the current config file to point to the
+* new config file, and then deletes the old config file.
+*/
 static int calyptia_config_commit(struct flb_in_calyptia_fleet_config *ctx)
 {
     int rc = FLB_FALSE;
@@ -1509,6 +1521,8 @@ static int calyptia_config_commit(struct flb_in_calyptia_fleet_config *ctx)
     }
 
     rc = FLB_TRUE;
+
+    flb_plg_info(ctx->ins, "committed new config: %s", cfgcurname);
 
 error:
     if (cfgnewname) {
@@ -1587,6 +1601,51 @@ static int calyptia_config_rollback(struct flb_in_calyptia_fleet_config *ctx,
     return FLB_TRUE;
 }
 #endif
+
+
+/**
+* Checks if the last config was successfully reloaded and if so, commits it.
+* This considers a newly received config to be successfully reloaded if
+* the current context indicates it was loaded from the new config file.
+*
+* This returns 0 unless there was an error.
+*/
+static int commit_config_if_reloaded(struct flb_in_calyptia_fleet_config *ctx)
+{
+   struct flb_config *config;
+
+   /* Get the current configuration */
+   config = ctx->ins->config;
+   if (config == NULL) {
+       return 0;
+   }
+
+   if (config->hot_reloading == FLB_TRUE) {
+       return 0;
+   }
+
+   if (config->hot_reload_succeeded != FLB_TRUE) {
+       /* The config either hasn't been reloaded yet or the reload failed */
+       return 0;
+   }
+
+   /* Check if the current config is from a new fleet config file */
+   if (exists_new_fleet_config(ctx) == FLB_FALSE) {
+       return 0;
+   }
+
+   if (is_new_fleet_config(ctx, config)) {
+       /* The config was successfully reloaded from the new file, commit it */
+       if (calyptia_config_commit(ctx) == FLB_TRUE) {
+           flb_plg_info(ctx->ins, "committed reloaded configuration");
+       } else {
+           flb_plg_error(ctx->ins, "failed to commit reloaded configuration");
+           return -1;
+       }
+   }
+
+   return 0;
+}
 
 static void fleet_config_get_properties(flb_sds_t *buf, struct mk_list *props, int fleet_config_legacy_format)
 {
@@ -1885,6 +1944,12 @@ static int in_calyptia_fleet_collect(struct flb_input_instance *ins,
          }
     }
 
+    /* Update symlinks if a recent reload was successful */
+    ret = commit_config_if_reloaded(ctx);
+    if (ret == -1) {
+        goto fleet_id_error;
+    }
+
     ret = get_calyptia_fleet_config(ctx);
 
 fleet_id_error:
@@ -1982,7 +2047,6 @@ static int fleet_cur_chdir(struct flb_in_calyptia_fleet_config *ctx)
 static int load_fleet_config(struct flb_in_calyptia_fleet_config *ctx)
 {
     flb_ctx_t *flb_ctx = flb_context_get();
-    flb_sds_t cfgnewname = NULL;
 
     /* check if we are already using the fleet configuration file. */
     if (is_fleet_config(ctx, flb_ctx->config) == FLB_FALSE) {
@@ -1991,8 +2055,8 @@ static int load_fleet_config(struct flb_in_calyptia_fleet_config *ctx)
         if (exists_cur_fleet_config(ctx) == FLB_TRUE) {
             return execute_reload(ctx, cur_fleet_config_filename(ctx));
         }
-        else if (exists_new_fleet_config(ctx) == FLB_TRUE) {
-            return execute_reload(ctx, new_fleet_config_filename(ctx));
+        if (exists_old_fleet_config(ctx) == FLB_TRUE) {
+            return execute_reload(ctx, old_fleet_config_filename(ctx));
         }
     }
     else {
@@ -2038,6 +2102,7 @@ static int create_fleet_file(flb_sds_t fleetdir,
 
     fp = fopen(fname, "w+");
     if (fp == NULL) {
+        flb_sds_destroy(fname);
         return -1;
     }
 
@@ -2176,6 +2241,7 @@ static int in_calyptia_fleet_init(struct flb_input_instance *in,
     int upstream_flags;
     struct flb_in_calyptia_fleet_config *ctx;
     (void) data;
+    flb_sds_t cfgnewname;
 
 #ifdef _WIN32
     char *tmpdir;
@@ -2272,13 +2338,30 @@ static int in_calyptia_fleet_init(struct flb_input_instance *in,
         create_fleet_header(ctx);
     }
 
+
+    /* If there is an uncommitted new config, delete it */
+    if (exists_new_fleet_config(ctx) == FLB_TRUE && is_new_fleet_config(ctx, config) == FLB_FALSE) {
+        cfgnewname = new_fleet_config_filename(ctx);
+
+        if (cfgnewname == NULL) {
+            flb_plg_error(ctx->ins, "unable to create new config filename");
+            in_calyptia_fleet_destroy(ctx);
+            return -1;
+        }
+
+        flb_plg_warn(ctx->ins, "deleting uncommitted new config: %s", cfgnewname);
+        if (calyptia_config_delete_new(ctx) != FLB_TRUE) {
+            flb_plg_error(ctx->ins, "unable to delete uncommitted new config");
+            in_calyptia_fleet_destroy(ctx);
+            return -1;
+        }
+        flb_plg_warn(ctx->ins, "deleted uncommitted new config: %s", cfgnewname);
+        flb_sds_destroy(cfgnewname);
+    }
+
     /* if we load a new configuration then we will be reloaded anyways */
     if (load_fleet_config(ctx) == FLB_TRUE) {
         return 0;
-    }
-
-    if (is_fleet_config(ctx, config)) {
-        calyptia_config_commit(ctx);
     }
 
     /* Set our collector based on time */
