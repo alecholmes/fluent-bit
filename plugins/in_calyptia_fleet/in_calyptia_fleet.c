@@ -55,6 +55,7 @@
 #include <Windows.h>
 #include <strsafe.h>
 #define PATH_MAX MAX_PATH
+#define S_ISDIR(m)      (((m) & S_IFMT) == S_IFDIR)
 #endif
 
 #define DEFAULT_INTERVAL_SEC  "15"
@@ -67,29 +68,6 @@ static int get_calyptia_files(struct flb_in_calyptia_fleet_config *ctx,
                               time_t timestamp);
 static void in_calyptia_fleet_destroy(struct flb_in_calyptia_fleet_config *ctx);
 static struct cfl_array *read_glob(const char *path);
-
-#ifndef FLB_SYSTEM_WINDOWS
-
-static int is_link(const char *path) {
-    struct stat st = { 0 };
-
-    if (lstat(path, &st) != 0) {
-        return -1;
-    }
-
-    if ((st.st_mode & S_IFMT) == S_IFLNK) {
-        return FLB_TRUE;
-    }
-
-    return FLB_FALSE;
-}
-#else
-/* symlinks are too difficult to use on win32 so we skip their use entirely. */
-static int is_link(const char *path) {
-    return FLB_FALSE;
-}
-#endif
-
 
 static char *find_case_header(struct flb_http_client *cli, const char *header)
 {
@@ -598,24 +576,8 @@ static int parse_config_name_timestamp(struct flb_in_calyptia_fleet_config *ctx,
         return FLB_FALSE;
     }
 
-    switch (is_link(cfgpath)) {
-    /* Prevent undefined references due to use of readlink */
-#ifndef FLB_SYSTEM_WINDOWS
-    case FLB_TRUE:
-        len = readlink(cfgpath, realname, sizeof(realname) - 1);
-        if (len < 0 || len >= (sizeof(realname) - 1)) {
-            return FLB_FALSE;
-        }
-        realname[len] = '\0';
-        break;
-#endif /* FLB_SYSTEM_WINDOWS */
-    case FLB_FALSE:
-        strncpy(realname, cfgpath, sizeof(realname)-1);
-        break;
-    default:
-        flb_errno();
-        return FLB_FALSE;
-    }
+    // TODO(alec): is this still needed?
+    strncpy(realname, cfgpath, sizeof(realname)-1);
 
     fname = basename(realname);
     flb_plg_debug(ctx->ins, "parsing configuration timestamp from path: %s", fname);
@@ -1685,7 +1647,7 @@ static int delete_dir(const char *path)
     for (idx = 0; idx < confs->entry_count; idx++) {
         entry_path = confs->entries[idx]->data.as_string;
         if (stat(entry_path, &entry_stat) == 0) {
-            if (S_ISDIR(entry_stat.st_mode)) {
+            if (S_ISDIR(entry_stat.st_mode)) { // as
                 flb_plg_info(ctx->ins, "deleting config directory: %s", entry_path);
                 if (delete_dir(entry_path) == FLB_FALSE) {
                     flb_plg_warn(ctx->ins, "unable to delete config directory: %s", entry_path);
@@ -1757,7 +1719,7 @@ static int calyptia_config_commit(struct flb_in_calyptia_fleet_config *ctx)
     flb_sds_t new_ref_filename = NULL;
 
     if (exists_new_fleet_config(ctx) == FLB_FALSE) {
-        flb_plg_error(ctx->ins, "no new configuration to commit");
+        flb_plg_info(ctx->ins, "no new configuration to commit");
         return FLB_FALSE;
     }
 
